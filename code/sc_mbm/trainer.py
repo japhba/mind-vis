@@ -1,4 +1,6 @@
 import math, sys
+
+import open_clip
 import torch
 import sc_mbm.utils as ut
 from torch._six import inf
@@ -71,13 +73,22 @@ def train_one_epoch(model, data_loader, optimizer, device, epoch,
             valid_idx = torch.nonzero(images.sum(dim=(1,2,3)) != 0).squeeze(1)
             img_feature_extractor.eval()
             with torch.no_grad():
+                # natural images
                 img_features = img_feature_extractor(preprocess(images[valid_idx]).to(device))['layer2']
+
+
+                # generate an image embedding with a Vanilla OpenCLIP
+                openclip, _, openclip_pre = open_clip.create_model_and_transforms('ViT-B-32-quickgelu',
+                                                                             pretrained='laion400m_e32')
+                openclip_features = openclip.encode_image(openclip_pre(images[valid_idx]).unsqueeze(0).to(device))['layer2']
+                openclip_features /= openclip_features.norm(dim=-1, keepdim=True)
+
         samples = samples.to(device)
         # img_features = img_features.to(device)
 
         optimizer.zero_grad()
         with torch.cuda.amp.autocast(enabled=True):
-            loss, pred, _ = model(samples, img_features, valid_idx=valid_idx, mask_ratio=config.mask_ratio)
+            loss, pred, _ = model(imgs=samples, img_features=img_features, openclip_features=openclip_features, valid_idx=valid_idx, mask_ratio=config.mask_ratio)
         # loss.backward()
         # norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad)
         # optimizer.step()

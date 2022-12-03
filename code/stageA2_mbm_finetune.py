@@ -19,6 +19,7 @@ from sc_mbm.trainer import train_one_epoch
 from sc_mbm.trainer import NativeScalerWithGradNormCount as NativeScaler
 from sc_mbm.utils import save_model
 
+import open_clip
 
 os.environ["WANDB_START_METHOD"] = "thread"
 os.environ['WANDB_DIR'] = "."
@@ -217,6 +218,8 @@ def update_config(args, config):
             if getattr(args, attr) != None:
                 setattr(config, attr, getattr(args, attr))
     return config
+
+    return image_features
 
 if __name__ == '__main__':
     args = get_args_parser()

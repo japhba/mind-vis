@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 from timm.models.vision_transformer import Block
 import torch.nn.functional as F
+import open_clip
 
 class PatchEmbed1D(nn.Module):
     """ 1 Dimensional version of data (fmri voxels) to Patch Embedding
@@ -83,6 +84,12 @@ class MAEforFMRI(nn.Module):
                 nn.Linear(decoder_embed_dim, 28*28, bias=True)
             )
             # --------------------------------------------------------------------------
+
+        # ---- CLIP2FMRI
+
+        fmri_latent_dim = embed_dim
+        clip_embed_dim = 512
+        self.clip2fmri = LinearRegression(clip_embed_dim, fmri_latent_dim)
 
         self.patch_size = patch_size
         self.embed_dim = embed_dim
@@ -291,7 +298,8 @@ class MAEforFMRI(nn.Module):
         loss = (loss * mask).sum() / mask.sum()  if mask.sum() != 0 else (loss * mask).sum() # mean loss on removed patches
         return loss
 
-    def forward(self, imgs, img_features=None, valid_idx=None, mask_ratio=0.75):
+    # TODO here the pics enter via img_features
+    def forward(self, imgs, img_features=None, openclip_features=None, valid_idx=None, mask_ratio=0.75):
         latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p]
         loss = self.forward_loss(imgs, pred, mask)
@@ -299,7 +307,15 @@ class MAEforFMRI(nn.Module):
         if self.use_nature_img_loss and img_features is not None:
             # valid_idx = torch.nonzero(nature_image.sum(dim=(1,2,3)) != 0).squeeze(1)
             if len(valid_idx) != 0:
-                nature_image_recon = self.forward_nature_img_decoder(latent[valid_idx], ids_restore[valid_idx])
+                # TODO use fresh image features here, as the here-provided features are potentially biased towards the reconstruction task; they could for example
+
+                fmri_latent_from_clip = self.clip2fmri(openclip_features)
+                # nature_image_recon = self.forward_nature_img_decoder(latent[valid_idx], ids_restore[valid_idx])
+
+                # freeze the network
+                with torch.no_grad():
+                    nature_image_recon = self.forward_nature_img_decoder(fmri_latent_from_clip, ids_restore[valid_idx])
+
                 loss_nature_image_recon = self.forward_nature_img_loss(img_features, nature_image_recon)
                 if torch.isnan(loss_nature_image_recon).sum():
                     print(loss_nature_image_recon)
@@ -392,4 +408,14 @@ class fmri_encoder(nn.Module):
         m, u = self.load_state_dict(state_dict, strict=False)
         print('missing keys:', u)
         print('unexpected keys:', m)
-        return 
+        return
+
+
+class LinearRegression(torch.nn.Module):
+    def __init__(self, inputSize, outputSize):
+        super().__init__()
+        self.linear = torch.nn.Linear(inputSize, outputSize)
+
+    def forward(self, x):
+        out = self.linear(x)
+        return out
