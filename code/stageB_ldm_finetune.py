@@ -158,6 +158,7 @@ def main(config):
         model_meta = torch.load(config.checkpoint_path, map_location='cpu')
         generative_model.model.load_state_dict(model_meta['model_state_dict'])
         print('model resumed')
+    
     # finetune the model
     trainer = create_trainer(config.num_epoch, config.precision, config.accumulate_grad, logger, check_val_every_n_epoch=5)
     generative_model.finetune(trainer, fmri_latents_dataset_train, fmri_latents_dataset_test,

@@ -82,6 +82,8 @@ def train_one_epoch(model, data_loader, optimizer, device, epoch,
                                                                              pretrained='laion400m_e32')
                 openclip_features = openclip.encode_image(openclip_pre(images[valid_idx]).unsqueeze(0).to(device))['layer2']
                 openclip_features /= openclip_features.norm(dim=-1, keepdim=True)
+        else:
+            openclip_features = None
 
         samples = samples.to(device)
         # img_features = img_features.to(device)
