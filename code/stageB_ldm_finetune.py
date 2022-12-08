@@ -241,6 +241,6 @@ if __name__ == '__main__':
     wandb_init(config, output_path)
 
     logger = WandbLogger()
-    config.logger = logger
+    config.logger = None
     main(config)
     wandb_finish()
