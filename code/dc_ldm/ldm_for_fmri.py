@@ -11,6 +11,7 @@ from torchvision.utils import make_grid
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from sc_mbm.mae_for_fmri import fmri_encoder
+import open_clip
 
 def create_model_from_config(config, num_voxels, global_pool):
     model = fmri_encoder(num_voxels=num_voxels, patch_size=config.patch_size, embed_dim=config.embed_dim,
@@ -44,7 +45,6 @@ class cond_stage_model(nn.Module):
         return out
 
 class fLDM:
-
     def __init__(self, metafile, num_voxels, device=torch.device('cpu'),
                  pretrain_root='../pretrains/ldm/label2img',
                  logger=None, ddim_steps=250, global_pool=True, use_time_cond=True):
@@ -62,6 +62,15 @@ class fLDM:
         m, u = model.load_state_dict(pl_sd, strict=False)
         model.cond_stage_trainable = True
         model.cond_stage_model = cond_stage_model(metafile, num_voxels, self.cond_dim, global_pool=global_pool)
+
+        # generate an image embedding with a Vanilla OpenCLIP
+        self.openclip, _, self.openclip_pre = open_clip.create_model_and_transforms('ViT-B-32-quickgelu',
+                                                                        pretrained='laion400m_e32')
+        
+        # ---- CLIP2FMRI ----
+        fmri_latent_dim = 768
+        clip_embed_dim = 512
+        model.clip2fmri_model = LinearRegression(clip_embed_dim, fmri_latent_dim)
 
         model.ddim_steps = ddim_steps
         model.re_init_ema()
@@ -93,8 +102,12 @@ class fLDM:
         print('\n##### Stage One: only optimize conditional encoders #####')
         dataloader = DataLoader(dataset, batch_size=bs1, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
-        self.model.unfreeze_whole_model()
-        self.model.freeze_first_stage()
+        
+        # train only the LR model
+        self.model.freeze_whole_model()
+        # unfreeze the openclip to fmri LR
+        for param in self.model.clip2fmri_model.parameters():
+            param.requires_grad = True
 
         self.model.learning_rate = lr1
         self.model.train_cond_stage_only = True
@@ -138,7 +151,13 @@ class fLDM:
                 if limit is not None:
                     if count >= limit:
                         break
-                latent = item['fmri']
+
+                # latent = item['fmri']
+                openclip_features = self.openclip.encode_image(self.openclip_pre(item['image']).unsqueeze(0).to(device))['layer2']
+                openclip_features /= openclip_features.norm(dim=-1, keepdim=True)
+                latent = model.clip2fmri_model(openclip_features)
+
+
                 gt_image = rearrange(item['image'], 'h w c -> 1 c h w') # h w c
                 print(f"rendering {num_samples} examples in {ddim_steps} steps.")
                 # assert latent.shape[-1] == self.fmri_latent_dim, 'dim error'
@@ -169,3 +188,11 @@ class fLDM:
         return grid, (255. * torch.stack(all_samples, 0).cpu().numpy()).astype(np.uint8)
 
 
+class LinearRegression(torch.nn.Module):
+    def __init__(self, inputSize, outputSize):
+        super().__init__()
+        self.linear = torch.nn.Linear(inputSize, outputSize)
+
+    def forward(self, x):
+        out = self.linear(x)
+        return out
